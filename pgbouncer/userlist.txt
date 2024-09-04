@@ -1,0 +1,3 @@
+"postgres" "postgres"
+"thingydba" "letmein"
+"docsdba" "showmedocs"

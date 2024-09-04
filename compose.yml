@@ -1,0 +1,155 @@
+version: "3.8"
+
+volumes:
+  docs-db-volume:
+  thingy-db-volume:
+  thingy-s3-volume:
+
+networks:
+  thingy-network:
+    external: false
+
+services:
+
+  thingy-redis:
+    image: "redis:alpine"
+    ports:
+      - "10379:6379"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 100m
+    networks:
+      thingy-network:
+
+  thingy-db:
+    build:  
+      context: ./thingy_db
+      dockerfile: Dockerfile
+    image: "thingy-db:local"
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_HOST_AUTH_METHOD=${POSTGRES_HOST_AUTH_METHOD}
+      - PGDATA=/pgdata
+    volumes:
+      - thingy-db-volume:/pgdata
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
+    ports:
+      - "10432:5432"
+    networks:
+      thingy-network:
+
+  docs-db:
+    build:
+      context: docs_service_db
+      dockerfile: Dockerfile
+    image: "docs-db:local"
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_HOST_AUTH_METHOD=${POSTGRES_HOST_AUTH_METHOD}
+      - PGDATA=/pgdata
+    volumes:
+      - docs-db-volume:/pgdata
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
+    ports:
+      - "10433:5432"
+    networks:
+      thingy-network:
+  
+  thingy-pgbouncer:
+    build:
+        context: ./pgbouncer
+        dockerfile: Dockerfile
+    image: "thingy-pgbouncer:local"
+    restart: unless-stopped
+    ports:
+      - "10400:6432"
+    depends_on:
+      - thingy-db
+      - docs-db
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
+    networks:
+        thingy-network:
+
+  thingy-s3:
+    image: minio/minio:latest
+    restart: unless-stopped
+    hostname: s3.thingy
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 500m
+    volumes:
+        - thingy-s3-volume:/data
+    environment:
+      - MINIO_ROOT_USER=${AWS_ACCESS_KEY_ID}
+      - MINIO_ROOT_PASSWORD=${AWS_SECRET_ACCESS_KEY}
+    command: server --console-address ":9001" /data
+    networks:
+      thingy-network:
+
+  thingy-s3-createbuckets:
+    image: thingy-minio-mc:local
+    build:
+        context: ./minio
+        dockerfile: Dockerfile
+    depends_on:
+      - thingy-s3
+    entrypoint: ./entrypoint.sh
+    volumes:
+        - thingy-s3-volume:/data
+    environment:
+      - MINIO_ROOT_USER=${AWS_ACCESS_KEY_ID}
+      - MINIO_ROOT_PASSWORD=${AWS_SECRET_ACCESS_KEY}
+      - thingy_MAIN_BUCKET=${AWS_STORAGE_BUCKET_NAME}
+    networks:
+      thingy-network:
+
+  thingy-web:  
+    build:
+      context: ../
+      dockerfile: Dockerfile
+  #   command: python manage.py runserver 0.0.0.0:8000  # change
+    env_file:
+       - ./environment/server.env  # change
+    volumes:
+      - ../project:/home/app
+    restart: unless-stopped
+    ports:
+      - "10000:80"
+    depends_on:
+      - thingy-pgbouncer
+      - thingy-redis
+    entrypoint: ["./start"]
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
+    networks:
+      thingy-network:
+        aliases:
+          - thingy-web.internal
